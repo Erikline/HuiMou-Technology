@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI大模型分析与帮助</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background-color: #f0f0f0;
+        }
+        .container {
+            text-align: center;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 10px;
+            background-color: #fff;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            width: 80%;
+            max-width: 600px;
+        }
+        h1 {
+            margin-bottom: 20px;
+        }
+        input[type="file"], input[type="text"], select, textarea {
+            margin-bottom: 20px;
+            width: 100%;
+            padding: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            margin-bottom: 20px;
+        }
+        .result {
+            margin-top: 20px;
+        }
+        .result img, .result video {
+            width: 100%;
+            height: auto;
+            max-width: 100%;
+            max-height: 400px;
+            object-fit: contain;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AI大模型分析与帮助</h1>
+        <input type="file" id="fileInput" accept="image/*,video/*">
+        <select id="modelSelect">
+            <option value="人员摔倒.pt">人员摔倒</option>
+            <option value="人员落水.pt">人员落水</option>
+            <option value="人闯红灯.pt">人闯红灯</option>
+            <option value="光伏板.pt">光伏板</option>
+            <option value="烟雾.pt">烟雾</option>
+            <option value="火焰.pt">火焰</option>
+            <option value="车闯红灯.pt">车闯红灯</option>
+            <option value="河道漂浮物.pt">河道漂浮物</option>
+            <option value="景区人流量识别.pt">景区人流量识别</option>
+            <option value="植物生长.pt">植物生长</option>
+        </select>
+        <textarea id="userQuery" placeholder="请输入您的问题"></textarea>
+        <button onclick="submitMedia()">提交</button>
+        <div class="result" id="result"></div>
+    </div>
+
+    <script>
+        async function submitMedia() {
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            const modelSelect = document.getElementById('modelSelect');
+            const modelFile = modelSelect.value;
+            const userQuery = document.getElementById('userQuery').value;
+
+            if (!file) {
+                alert('请选择一个文件');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('source', file);
+            formData.append('weight_file', modelFile); // 选择的模型文件
+            formData.append('fileType', file.type.startsWith('image/') ? 'image' : 'video');
+            formData.append('userQuery', userQuery); // 用户输入的问题
+
+            try {
+                const response = await fetch('/detect', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (data.result) {
+                    const resultDiv = document.getElementById('result');
+                    if (file.type.startsWith('image/')) {
+                        resultDiv.innerHTML = `<img src="${data.result}" alt="Processed Image" class="result-image">`;
+                    } else {
+                        resultDiv.innerHTML = `<video src="${data.result}" controls class="result-video"></video>`;
+                    }
+                    resultDiv.innerHTML += `<p>${data.analysis_result}</p>`;
+                } else {
+                    throw new Error(data.error || "处理失败，未收到结果");
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('处理失败，请稍后再试');
+            }
+        }
+    </script>
+</body>
+</html>

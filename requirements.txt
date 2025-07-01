@@ -1,0 +1,15 @@
+Flask
+Flask-CORS
+opencv-python
+oss2
+moviepy
+ultralytics
+mysql-connector-python
+APScheduler
+numpy
+Pillow
+torch
+torchvision
+requests
+openai
+schedule
