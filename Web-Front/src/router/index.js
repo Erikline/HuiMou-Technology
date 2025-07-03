@@ -7,6 +7,7 @@ import Test from '../views/Test.vue'
 import DroneStream from '../views/DroneStream.vue'
 import AiAnalysis from '../views/AiAnalysis.vue'
 import Login from '../views/Login.vue'
+import AdminDashboard from '../views/AdminDashboard.vue'
 import store from '../store'
 
 const routes = [
@@ -30,12 +31,6 @@ const routes = [
     component: ProjectIntro
   },
   {
-    path: '/product-market',
-    name: 'productMarket',
-    component: ProductMarket,
-    meta: { requiresAuth: true }
-  },
-  {
     path: '/about',
     name: 'about',
     component: About
@@ -57,6 +52,18 @@ const routes = [
     name: 'aiAnalysis',
     component: AiAnalysis,
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/product-market',
+    name: 'productMarket',
+    component: ProductMarket,
+    meta: { requiresAuth: true, role: 'user' }
+  },
+  {
+    path: '/admin',
+    name: 'adminDashboard',
+    component: AdminDashboard,
+    meta: { requiresAuth: true, role: 'admin' }
   }
 ]
 
@@ -65,17 +72,24 @@ const router = createRouter({
   routes
 })
 
-// 路由守卫
 router.beforeEach((to, from, next) => {
+  const isAuth = store.getters.isAuthenticated
+  const user = store.getters.currentUser
+
   if (to.matched.some(record => record.meta.requiresAuth)) {
-    if (!store.getters.isAuthenticated) {
-      next({ name: 'login' })
-    } else {
-      next()
+    if (!isAuth) {
+      // 未登录用户访问受限页面
+      return next({ name: 'login' })
     }
-  } else {
-    next()
+
+    const requiredRole = to.meta.role
+    if (requiredRole && user?.role !== requiredRole) {
+      // 登录了但访问了非本身份页面
+      return next({ name: 'home' })
+    }
   }
+
+  next()
 })
 
 export default router
