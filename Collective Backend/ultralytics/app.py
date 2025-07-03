@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 import random
 import shutil
 import time
@@ -27,6 +28,7 @@ os.environ['ARK_API_KEY'] = 'XXXXXXXX'  # 豆包视觉模型API Key
 
 # Flask 应用初始化
 app = Flask(__name__)
+app.secret_key = secrets.token_hex(16)
 
 # 新增：处理后图片目录
 PROCESSED_DIR = 'processed_images'
