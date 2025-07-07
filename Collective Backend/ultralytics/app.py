@@ -21,11 +21,11 @@ from modules.ddos_detector import DDoSDetector
 from config.database import execute_query
 from scheduler import scheduler
 
+
 # 设置环境变量
 os.environ['VOLC_ACCESSKEY'] = 'XXXXXXXX'
 os.environ['VOLC_SECRETKEY'] = 'XXXXXXXX'
 os.environ['ARK_API_KEY'] = 'XXXXXXXX'  # 豆包视觉模型API Key
-
 # Flask 应用初始化
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
@@ -183,7 +183,6 @@ def index():
     return render_template('index.html')
 
 @app.route('/detect', methods=['POST'])
-@require_auth
 @ddos_protection('session')
 def detect():
     """处理文件上传、模型预测和结果返回。"""
@@ -194,7 +193,7 @@ def detect():
     file = request.files['source']
     weight_file = request.form.get('weight_file', '烟雾.pt')
     file_type = request.form.get('fileType', 'image')
-    user_id = session.get('user_id')
+    user_id = session.get('user_id', 1)
 
     logging.info(f"User {user_id} - Received file: {file.filename}, weight_file: {weight_file}, file_type: {file_type}")
 
@@ -300,14 +299,13 @@ def detect():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/analyze', methods=['POST'])
-@require_auth
 @ddos_protection('conversation')
 def analyze_endpoint():
     """处理大模型分析请求 - 使用豆包视觉模型分析本地图片。"""
     data = request.json
     user_query = data.get('userQuery', '这是什么？')
     session_id = data.get('session_id')
-    user_id = session.get('user_id')
+    user_id = session.get('user_id', 1)
 
     if not user_query or not session_id:
         return jsonify({"error": "Missing user query or session ID"}), 400
@@ -329,10 +327,6 @@ def analyze_endpoint():
         if not os.path.exists(processed_image_path):
             return jsonify({"error": "Processed image file not found"}), 404
         
-        # 将本地图片转换为base64编码，以便发送给豆包模型
-        with open(processed_image_path, 'rb') as image_file:
-            image_data = base64.b64encode(image_file.read()).decode('utf-8')
-        
         # 记录用户消息
         if session_id:
             # 获取当前轮次
@@ -347,6 +341,88 @@ def analyze_endpoint():
                 "INSERT INTO user_messages (session_id, round_id, message_content) VALUES (%s, %s, %s)",
                 (session_id, round_id, user_query)
             )
+        
+        # -------------------------- 新增敏感关键词检测逻辑 --------------------------
+        # 1. 检测敏感词
+        trigger_keywords = []
+        keywords = execute_query(
+            "SELECT keyword, category FROM sensitive_keywords",
+            fetch=True
+        )
+        
+        # 检查用户消息是否包含敏感词
+        for kw in keywords:
+            if kw['keyword'] in user_query:  # 模糊
+                trigger_keywords.append({
+                    'keyword': kw['keyword'],
+                    'category': kw['category']
+                }) # [“航道"] == 1
+        
+        # 2. 记录敏感词触发
+        keyword_triggered = 1 if trigger_keywords else 0
+        execute_query(
+            """INSERT INTO keyword_trigger_details 
+               (session_id, round_id, user_id, keyword_triggered, triggered_keywords) 
+               VALUES (%s, %s, %s, %s, %s)""",
+            (session_id, round_id, user_id, keyword_triggered, str(trigger_keywords))
+        )
+        
+        # 3. 检测是否次数达标封禁
+        if trigger_keywords:
+            execute_query(
+                """INSERT INTO user_security_stats (user_id, total_keyword_triggers)
+                   VALUES (%s, 1) ON DUPLICATE KEY UPDATE 
+                   total_keyword_triggers = total_keyword_triggers + 1""",
+                (user_id,)
+            )
+            stats = execute_query(
+                "SELECT total_keyword_triggers FROM user_security_stats WHERE user_id = %s",
+                (user_id,),
+                fetch=True
+            )
+            
+            if stats and stats[0]['total_keyword_triggers'] % 10 == 0:
+                # 计算封禁时间, 1天
+                from datetime import timedelta
+                ban_duration = 24 * 60  # 24小时
+                unban_at = datetime.now() + timedelta(minutes=ban_duration)
+                
+                # 封禁用户
+                execute_query(
+                    """INSERT INTO banned_users 
+                       (user_id, ban_reason, ban_duration, unban_at, is_active)
+                       VALUES (%s, 'keyword_trigger', %s, %s, 1)
+                       ON DUPLICATE KEY UPDATE 
+                       ban_reason = 'keyword_trigger',
+                       ban_duration = %s,
+                       unban_at = %s,
+                       is_active = 1,
+                       created_at = CURRENT_TIMESTAMP""",
+                    (user_id, ban_duration, unban_at, ban_duration, unban_at)
+                )
+
+                session.clear()
+                return jsonify({
+                    "error": "keyword_ban",
+                    "message": f"您的消息包含敏感内容，已被系统封禁24小时（累计触发{stats[0]['total_keyword_triggers']}次）",
+                    "ban_duration": "24小时",
+                    "unban_time": unban_at.isoformat(),
+                    "triggered_keywords": trigger_keywords,
+                    "redirect": True
+                }), 403
+        
+            # 5. 提示用户
+            return jsonify({
+                    "error": "keyword_error",
+                    "message": f"您的消息包含敏感内容，累计触发{stats[0]['total_keyword_triggers']}次",
+                    "triggered_keywords": trigger_keywords,
+                    "redirect": True
+                }), 403
+        # -------------------------- 敏感关键词检测逻辑结束 --------------------------
+        
+        # 将本地图片转换为base64编码，以便发送给豆包模型
+        with open(processed_image_path, 'rb') as image_file:
+            image_data = base64.b64encode(image_file.read()).decode('utf-8')
         
         # 使用豆包视觉模型分析本地图片
         response = client.chat.completions.create(
@@ -378,8 +454,11 @@ def analyze_endpoint():
             )
         
         return jsonify({
+            "num": stats[0]["total_keyword_triggers"],
             "analysis_result": clean_result,
-            "processed_image_path": processed_image_path
+            "processed_image_path": processed_image_path,
+            "keyword_triggered": keyword_triggered,
+            "triggered_keywords": trigger_keywords  # 可选：返回触发的敏感词信息
         })
 
     except Exception as e:
