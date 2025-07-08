@@ -7,9 +7,9 @@ from contextlib import contextmanager
 DB_CONFIG = {
     'host': 'localhost',
     'port': 3306,
-    'database': 'AIDataBase',
+    'database': 'aidatabase',
     'user': 'root',
-    'password': 'XXXXXXX',  # 请修改为实际密码
+    'password': 'xxxxxxx',  # 请修改为实际密码
     'charset': 'utf8mb4',
     'autocommit': True
 }

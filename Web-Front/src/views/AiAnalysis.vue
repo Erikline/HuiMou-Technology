@@ -91,7 +91,7 @@ const sendQuery = async () => {
       body: JSON.stringify({
         userQuery: userQuery.value,
         session_id: sessionId
-      })  // 用户id
+      })
     });
 
     const data = await response.json();
@@ -123,23 +123,6 @@ const sendQuery = async () => {
     }
     
     if (!response.ok) {
-      confirm(
-        `${data.message}`
-      );
-      
-      if (response.num !== null) {
-        // 清除前端用户状态 - 修正语法
-        store.commit('clearUser');
-        
-        // 调用强制退出登录接口
-        await fetch('http://localhost:5001/auth/force-logout', {
-          method: 'POST',
-          credentials: 'include'
-        });
-        
-        // 重定向到首页 - 修正语法
-        router.push('/');
-      }
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
