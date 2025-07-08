@@ -244,6 +244,14 @@ CREATE TABLE banned_users (
     FOREIGN KEY (banned_by_admin_id) REFERENCES admin_names(admin_id) ON DELETE SET NULL
 ) COMMENT='被封禁用户管理表，专门记录和管理用户封禁状态';
 
+-- 16. 管理员邀请码表
+CREATE TABLE admin_invite_codes (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    invite_code VARCHAR(50) UNIQUE NOT NULL COMMENT '邀请码',
+    used_by_user_id INT NULL COMMENT '使用该邀请码的用户ID',
+    FOREIGN KEY (used_by_user_id) REFERENCES user_names(user_id)
+) COMMENT='管理员邀请码表';
+
 -- =============================================================================
 -- 系统初始化数据
 -- =============================================================================
@@ -362,3 +370,16 @@ INSERT INTO sensitive_keywords (keyword, category) VALUES
 ('破坏社会秩序', '其他敏感'),
 ('违法犯罪', '其他敏感'),
 ('有害信息', '其他敏感');
+
+-- 插入预设的管理员邀请码（可重复使用）
+INSERT INTO admin_invite_codes (invite_code) VALUES 
+('ADMIN2025'),
+('MANAGER001'),
+('SUPERVISOR'),
+('HUIMOU_ADMIN'),
+('TECH_LEAD'),
+('SYSTEM_ADMIN'),
+('MASTER_KEY'),
+('ADMIN_ACCESS'),
+('CONTROL_PANEL'),
+('ROOT_ACCESS');

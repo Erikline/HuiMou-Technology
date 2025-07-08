@@ -11,6 +11,66 @@ class UserManager:
         return hashlib.sha256(password.encode()).hexdigest()
     
     @staticmethod
+    def verify_invite_code(invite_code):
+        """验证管理员邀请码"""
+        try:
+            result = execute_query(
+                "SELECT invite_code FROM admin_invite_codes WHERE invite_code = %s",
+                (invite_code,),
+                fetch=True
+            )
+            return len(result) > 0
+        except Exception as e:
+            logging.error(f"Error verifying invite code: {e}")
+            return False
+    
+    @staticmethod
+    def create_admin(username, password, invite_code):
+        """创建管理员用户"""
+        try:
+            # 验证邀请码
+            if not UserManager.verify_invite_code(invite_code):
+                raise Exception("Invalid invite code")
+            
+            # 插入管理员名
+            execute_query(
+                "INSERT INTO admin_names (admin_name) VALUES (%s)",
+                (username,)
+            )
+            
+            # 获取管理员ID
+            admin_data = execute_query(
+                "SELECT admin_id FROM admin_names WHERE admin_name = %s",
+                (username,),
+                fetch=True
+            )
+            
+            if not admin_data:
+                raise Exception("Failed to create admin")
+            
+            admin_id = admin_data[0]['admin_id']
+            
+            # 插入密码
+            hashed_password = UserManager.hash_password(password)
+            execute_query(
+                "INSERT INTO admin_passwords (admin_id, password) VALUES (%s, %s)",
+                (admin_id, hashed_password)
+            )
+            
+            # 设置管理员权限
+            admin_permissions = ['manage', 'view_ALLdiagram']
+            for perm in admin_permissions:
+                execute_query(
+                    "INSERT INTO permissions (admin_id, permission_value, permission_type) VALUES (%s, %s, %s)",
+                    (admin_id, 1, perm)
+                )
+            
+            return admin_id
+        except Exception as e:
+            logging.error(f"Error creating admin: {e}")
+            raise
+    
+    @staticmethod
     def create_user(username, password):
         """创建新用户"""
         try:
@@ -69,9 +129,11 @@ class UserManager:
         """用户认证"""
         try:
             hashed_password = UserManager.hash_password(password)
+            
+            # 先尝试普通用户认证
             user_data = execute_query(
                 """
-                SELECT un.user_id, un.username 
+                SELECT un.user_id, un.username, 'user' as role
                 FROM user_names un
                 JOIN user_passwords up ON un.user_id = up.user_id
                 WHERE un.username = %s AND up.password = %s
@@ -82,6 +144,22 @@ class UserManager:
             
             if user_data:
                 return user_data[0]
+            
+            # 再尝试管理员认证
+            admin_data = execute_query(
+                """
+                SELECT an.admin_id as user_id, an.admin_name as username, 'admin' as role
+                FROM admin_names an
+                JOIN admin_passwords ap ON an.admin_id = ap.admin_id
+                WHERE an.admin_name = %s AND ap.password = %s
+                """,
+                (username, hashed_password),
+                fetch=True
+            )
+            
+            if admin_data:
+                return admin_data[0]
+            
             return None
         except Exception as e:
             logging.error(f"Error authenticating user: {e}")
