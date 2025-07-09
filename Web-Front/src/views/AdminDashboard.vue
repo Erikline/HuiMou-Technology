@@ -7,9 +7,6 @@
         <li class="nav-item">
           <a class="nav-link text-white" :class="{ active: view === 'status' }" @click="view = 'status'">用户状态</a>
         </li>
-        <li class="nav-item">
-          <a class="nav-link text-white" :class="{ active: view === 'history' }" @click="view = 'history'">历史记录</a>
-        </li>
         <li class="nav-item mt-4">
           <button class="btn btn-outline-light w-100" @click="goBack">返回主页</button>
         </li>
@@ -22,22 +19,73 @@
     <!-- 主体内容 -->
     <div class="content flex-grow-1 p-4">
       <div v-if="view === 'status'">
-        <h3>用户登录状态</h3>
-        <p>展示用户的登录情况：</p>
-        <table class="table mt-3">
-          <thead><tr><th>用户名</th><th>状态</th><th>登录时间</th></tr></thead>
-          <tbody>
-            <tr><td>admin</td><td>已登录</td><td>2025-07-04 20:00</td></tr>
-            <tr><td>user1</td><td>未登录</td><td>-</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else-if="view === 'history'">
-        <h3>用户历史记录</h3>
-        <ul class="list-group mt-3">
-          <li class="list-group-item">user1 浏览了产品页面</li>
-          <li class="list-group-item">user2 提交了订单</li>
-        </ul>
+        <h3>用户管理</h3>
+        
+        <!-- 封禁用户表单 -->
+        <div class="card mb-4">
+          <div class="card-header">封禁用户</div>
+          <div class="card-body">
+            <div class="mb-3">
+              <label class="form-label">用户ID</label>
+              <input v-model="banForm.userId" type="number" class="form-control">
+            </div>
+            <div class="mb-3">
+              <label class="form-label">封禁原因</label>
+              <select v-model="banForm.reason" class="form-select">
+                <option value="manual_ban">手动封禁</option>
+                <option value="violation">违规行为</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">封禁时长(分钟)</label>
+              <input v-model="banForm.duration" type="number" class="form-control" placeholder="留空表示永久封禁">
+            </div>
+            <button @click="banUser" class="btn btn-danger">封禁用户</button>
+          </div>
+        </div>
+        
+        <!-- 解封用户表单 -->
+        <div class="card mb-4">
+          <div class="card-header">解封用户</div>
+          <div class="card-body">
+            <div class="mb-3">
+              <label class="form-label">用户ID</label>
+              <input v-model="unbanForm.userId" type="number" class="form-control">
+            </div>
+            <button @click="unbanUser" class="btn btn-success">解封用户</button>
+          </div>
+        </div>
+        
+        <!-- 被封禁用户列表 -->
+        <div class="card">
+          <div class="card-header">当前被封禁用户</div>
+          <div class="card-body">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>用户ID</th>
+                  <th>用户名</th>
+                  <th>封禁原因</th>
+                  <th>封禁时间</th>
+                  <th>解封时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="user in bannedUsers" :key="user.user_id">
+                  <td>{{ user.user_id }}</td>
+                  <td>{{ user.username }}</td>
+                  <td>{{ user.ban_reason }}</td>
+                  <td>{{ formatDate(user.banned_at) }}</td>
+                  <td>{{ formatDate(user.unban_at) }}</td>
+                  <td>
+                    <button @click="unbanUserById(user.user_id)" class="btn btn-sm btn-outline-success">解封</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -48,10 +96,105 @@ export default {
   name: 'AdminDashboard',
   data() {
     return {
-      view: 'status'
+      view: 'status',
+      banForm: {
+        userId: '',
+        reason: 'manual_ban',
+        duration: ''
+      },
+      unbanForm: {
+        userId: ''
+      },
+      bannedUsers: []
     }
   },
+  mounted() {
+    this.fetchBannedUsers();
+  },
   methods: {
+    formatDate(dateStr) {
+      if (!dateStr) return '永久';
+      return new Date(dateStr).toLocaleString();
+    },
+    async fetchBannedUsers() {
+      try {
+        const response = await fetch('http://localhost:5001/admin/banned-users', {
+          headers: {
+            'Admin-ID': '1' // 简化版认证，实际项目中应该使用更安全的方式
+          }
+        });
+        if (response.ok) {
+          this.bannedUsers = await response.json();
+        } else {
+          console.error('Failed to fetch banned users');
+        }
+      } catch (error) {
+        console.error('Error fetching banned users:', error);
+      }
+    },
+    async banUser() {
+      if (!this.banForm.userId) {
+        alert('请输入用户ID');
+        return;
+      }
+      
+      try {
+        const response = await fetch('http://localhost:5001/admin/ban-user', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Admin-ID': '1'
+          },
+          body: JSON.stringify({
+            user_id: this.banForm.userId,
+            reason: this.banForm.reason,
+            duration: this.banForm.duration || null
+          })
+        });
+        
+        if (response.ok) {
+          alert('用户封禁成功');
+          this.fetchBannedUsers();
+          this.banForm = { userId: '', reason: 'manual_ban', duration: '' };
+        } else {
+          const error = await response.json();
+          alert(`封禁失败: ${error.error}`);
+        }
+      } catch (error) {
+        console.error('Error banning user:', error);
+        alert('封禁用户时出错');
+      }
+    },
+    async unbanUser() {
+      if (!this.unbanForm.userId) {
+        alert('请输入用户ID');
+        return;
+      }
+      
+      await this.unbanUserById(this.unbanForm.userId);
+      this.unbanForm.userId = '';
+    },
+    async unbanUserById(userId) {
+      try {
+        const response = await fetch(`http://localhost:5001/admin/unban-user/${userId}`, {
+          method: 'POST',
+          headers: {
+            'Admin-ID': '1'
+          }
+        });
+        
+        if (response.ok) {
+          alert('用户解封成功');
+          this.fetchBannedUsers();
+        } else {
+          const error = await response.json();
+          alert(`解封失败: ${error.error}`);
+        }
+      } catch (error) {
+        console.error('Error unbanning user:', error);
+        alert('解封用户时出错');
+      }
+    },
     goBack() {
       this.$router.push('/Home')
     },
