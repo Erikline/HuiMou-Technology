@@ -97,18 +97,17 @@ export default {
   data() {
     return {
       view: 'status',
-      banForm: {
-        userId: '',
-        reason: 'manual_ban',
-        duration: ''
-      },
-      unbanForm: {
-        userId: ''
-      },
+      banForm: { userId: '', reason: 'manual_ban', duration: '' },
+      unbanForm: { userId: '' },
       bannedUsers: []
     }
   },
-  mounted() {
+  async created() {
+    const isAdmin = await this.$store.dispatch('checkAdmin');
+    if (!isAdmin) {
+      this.$router.push('/');
+      return;
+    }
     this.fetchBannedUsers();
   },
   methods: {
@@ -120,30 +119,25 @@ export default {
       try {
         const response = await fetch('http://localhost:5001/admin/banned-users', {
           headers: {
-            'Admin-ID': '1' 
+            'Admin-ID': this.$store.state.user?.id || ''
           }
         });
         if (response.ok) {
           this.bannedUsers = await response.json();
-        } else {
-          console.error('Failed to fetch banned users');
         }
       } catch (error) {
-        console.error('Error fetching banned users:', error);
+        console.error('获取封禁用户失败:', error);
       }
     },
     async banUser() {
-      if (!this.banForm.userId) {
-        alert('请输入用户ID');
-        return;
-      }
+      if (!this.banForm.userId) return alert('请输入用户ID');
       
       try {
         const response = await fetch('http://localhost:5001/admin/ban-user', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Admin-ID': '1'
+            'Admin-ID': this.$store.state.user?.id || ''
           },
           body: JSON.stringify({
             user_id: this.banForm.userId,
@@ -153,54 +147,39 @@ export default {
         });
         
         if (response.ok) {
-          alert('用户封禁成功');
+          alert('封禁成功');
           this.fetchBannedUsers();
           this.banForm = { userId: '', reason: 'manual_ban', duration: '' };
-        } else {
-          const error = await response.json();
-          alert(`封禁失败: ${error.error}`);
         }
       } catch (error) {
-        console.error('Error banning user:', error);
-        alert('封禁用户时出错');
+        alert('封禁操作失败');
       }
-    },
-    async unbanUser() {
-      if (!this.unbanForm.userId) {
-        alert('请输入用户ID');
-        return;
-      }
-      
-      await this.unbanUserById(this.unbanForm.userId);
-      this.unbanForm.userId = '';
     },
     async unbanUserById(userId) {
       try {
-        const response = await fetch(`http://localhost:5001/admin/unban-user/${userId}`, {
-          method: 'POST',
-          headers: {
-            'Admin-ID': '1'
+        const response = await fetch(
+          `http://localhost:5001/admin/unban-user/${userId}`,
+          {
+            method: 'POST',
+            headers: {
+              'Admin-ID': this.$store.state.user?.id || ''
+            }
           }
-        });
-        
+        );
         if (response.ok) {
-          alert('用户解封成功');
+          alert('解封成功');
           this.fetchBannedUsers();
-        } else {
-          const error = await response.json();
-          alert(`解封失败: ${error.error}`);
         }
       } catch (error) {
-        console.error('Error unbanning user:', error);
-        alert('解封用户时出错');
+        alert('解封操作失败');
       }
     },
     goBack() {
-      this.$router.push('/Home')
+      this.$router.push('/Home');
     },
-    logout() {
-      localStorage.removeItem('user')
-      this.$router.push('/login')
+    async logout() {
+      await this.$store.dispatch('logout');
+      this.$router.push('/login');
     }
   }
 }
