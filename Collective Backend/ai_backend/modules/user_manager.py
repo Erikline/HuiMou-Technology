@@ -71,7 +71,7 @@ class UserManager:
             raise
     
     @staticmethod
-    def create_user(username, password):
+    def create_user(username: str, password: str, role: str = 'user') -> int:
         """创建新用户"""
         try:
             # 插入用户名
@@ -98,6 +98,12 @@ class UserManager:
                 "INSERT INTO user_passwords (user_id, password) VALUES (%s, %s)",
                 (user_id, hashed_password)
             )
+
+            # 插入用户记录（包含role字段）
+            execute_query(
+                "INSERT INTO user_names (username, role) VALUES (%s, %s)",  
+                (username, role) 
+            )
             
             # 初始化安全统计
             execute_query(
@@ -113,6 +119,8 @@ class UserManager:
             
             # 设置默认权限
             permissions = ['upload', 'chat']
+            if role == 'admin':
+                permissions.extend(['ban_user', 'unban_user'])
             for perm in permissions:
                 execute_query(
                     "INSERT INTO permissions (user_id, permission_value, permission_type) VALUES (%s, %s, %s)",
@@ -130,37 +138,43 @@ class UserManager:
         try:
             hashed_password = UserManager.hash_password(password)
             
-            # 先尝试普通用户认证
-            user_data = execute_query(
+            # 统一查询（同时检查用户和管理员表）
+            auth_data = execute_query(
                 """
-                SELECT un.user_id, un.username, 'user' as role
-                FROM user_names un
-                JOIN user_passwords up ON un.user_id = up.user_id
-                WHERE un.username = %s AND up.password = %s
+                SELECT 
+                    u.user_id, 
+                    COALESCE(u.username, a.admin_name) AS username,
+                    COALESCE(u.role, 'admin') AS role,
+                    'user' AS auth_type
+                FROM (
+                    SELECT user_id, username, role FROM user_names 
+                    WHERE username = %s
+                    UNION ALL
+                    SELECT admin_id AS user_id, admin_name AS username, 'admin' AS role 
+                    FROM admin_names 
+                    WHERE admin_name = %s
+                ) AS combined
+                LEFT JOIN user_passwords up ON combined.role = 'user' AND up.user_id = combined.user_id
+                LEFT JOIN admin_passwords ap ON combined.role = 'admin' AND ap.admin_id = combined.user_id
+                WHERE (up.password = %s OR ap.password = %s)
+                LIMIT 1
                 """,
-                (username, hashed_password),
+                (username, username, hashed_password, hashed_password),
                 fetch=True
             )
             
-            if user_data:
-                return user_data[0]
+            if not auth_data:
+                return None
+                
+            user = auth_data[0]
             
-            # 再尝试管理员认证
-            admin_data = execute_query(
-                """
-                SELECT an.admin_id as user_id, an.admin_name as username, 'admin' as role
-                FROM admin_names an
-                JOIN admin_passwords ap ON an.admin_id = ap.admin_id
-                WHERE an.admin_name = %s AND ap.password = %s
-                """,
-                (username, hashed_password),
-                fetch=True
-            )
+            # 检查封禁状态（仅对普通用户）
+            if user['role'] == 'user':
+                is_banned, ban_info = UserManager.is_user_banned(user['user_id'])
+                if is_banned:
+                    raise PermissionError(f"账户已被封禁: {ban_info}")
             
-            if admin_data:
-                return admin_data[0]
-            
-            return None
+            return user
         except Exception as e:
             logging.error(f"Error authenticating user: {e}")
             return None
