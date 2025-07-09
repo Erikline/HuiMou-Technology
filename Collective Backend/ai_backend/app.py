@@ -714,6 +714,17 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
+@app.route('/auth/check-admin', methods=['GET'])
+@require_auth
+def check_admin():
+    user_id = session.get('user_id')
+    is_admin = execute_query(
+        "SELECT 1 FROM admin_names WHERE admin_id = %s",
+        (user_id,),
+        fetch=True
+    )
+    return jsonify({"isAdmin": bool(is_admin)})
+
 @app.route('/admin/banned-users', methods=['GET'])
 @require_auth
 @admin_required
@@ -731,6 +742,9 @@ def get_banned_users():
 def ban_user():
     """封禁用户"""
     data = request.json
+    admin_id = request.headers.get('Admin-ID')
+    if not admin_id:
+        return jsonify({"error": "Missing Admin-ID header"}), 401
     try:
         AdminManager.ban_user(
             user_id=data.get('user_id'),
