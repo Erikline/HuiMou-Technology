@@ -21,6 +21,7 @@ from modules.user_manager import UserManager
 from modules.ddos_detector import DDoSDetector
 from config.database import execute_query
 from scheduler import scheduler
+from modules.admin_manager import AdminManager
 
 # 设置环境变量
 os.environ['VOLC_ACCESSKEY'] = 'AKLTNmZlNTYxZDc4ZDBhNGE5ZmEzMDc3ZTBhZmQyZGE0ZDM'
@@ -703,45 +704,53 @@ def reset_all_stats():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ===================== 新增管理员路由 =====================
+def admin_required(f):
+    """管理员权限装饰器"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if session.get('role') != 'admin':
+            return jsonify({"error": "Administrator access required"}), 403
+        return f(*args, **kwargs)
+    return decorated
+
 @app.route('/admin/banned-users', methods=['GET'])
 @require_auth
+@admin_required
 def get_banned_users():
-    """获取所有被封禁用户列表（管理员接口）"""
+    """获取封禁用户列表"""
     try:
-        banned_users = execute_query(
-            """
-            SELECT bu.*, un.username 
-            FROM banned_users bu
-            JOIN user_names un ON bu.user_id = un.user_id
-            WHERE bu.is_active = 1
-            ORDER BY bu.banned_at DESC
-            """,
-            fetch=True
-        )
-        return jsonify(banned_users)
+        users = AdminManager.get_banned_users()
+        return jsonify(users)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/admin/ban-user', methods=['POST'])
+@require_auth
+@admin_required
+def ban_user():
+    """封禁用户"""
+    data = request.json
+    try:
+        AdminManager.ban_user(
+            user_id=data.get('user_id'),
+            reason=data.get('reason', 'manual_ban'),
+            duration=data.get('duration')
+        )
+        return jsonify({"message": "User banned successfully"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
 @app.route('/admin/unban-user/<int:user_id>', methods=['POST'])
 @require_auth
+@admin_required
 def unban_user(user_id):
-    """解封用户（管理员接口）"""
+    """解封用户"""
     try:
-        # 解除封禁
-        execute_query(
-            "UPDATE banned_users SET is_active = 0 WHERE user_id = %s",
-            (user_id,)
-        )
-        
-        # 恢复用户权限
-        execute_query(
-            "UPDATE permissions SET permission_value = 1 WHERE user_id = %s AND permission_value IS NULL",
-            (user_id,)
-        )
-        
+        AdminManager.unban_user(user_id)
         return jsonify({"message": "User unbanned successfully"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e)}), 400
 
 # 在文件末尾添加
 from scheduler import scheduler
