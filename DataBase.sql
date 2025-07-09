@@ -35,7 +35,8 @@ USE AIDataBase;
 -- 设计理念：分离用户标识和内部ID，便于用户名修改和系统扩展
 CREATE TABLE user_names (
     user_id INT PRIMARY KEY AUTO_INCREMENT COMMENT '系统内部用户ID，自增主键',
-    username VARCHAR(50) UNIQUE NOT NULL COMMENT '用户名，唯一标识符'
+    username VARCHAR(50) UNIQUE NOT NULL COMMENT '用户名，唯一标识符',
+    role ENUM('user', 'admin') DEFAULT 'user' COMMENT '用户角色：user=普通用户, admin=管理员'
 );
 
 -- 2. 用户id-密码映射表
@@ -104,7 +105,7 @@ CREATE TABLE permissions (
     user_id INT NULL COMMENT '普通用户ID，与admin_id互斥',
     admin_id INT NULL COMMENT '管理员ID，与user_id互斥',
     permission_value TINYINT(1) NULL COMMENT '权限值：0=无权限，1=有权限，NULL=被封禁用户（无任何权限）',
-    permission_type ENUM('upload', 'chat', 'manage', 'view_ALLdiagram') NOT NULL COMMENT '权限类型：upload=上传图片，chat=对话，manage=管理用户,view_ALLdiagram=查看所有图表',
+    permission_type ENUM('upload', 'chat', 'manage', 'view_ALLdiagram', 'ban_user','unban_user') NOT NULL COMMENT '权限类型：upload=上传图片，chat=对话，manage=管理用户,view_ALLdiagram=查看所有图表,ban_user=封禁用户,unban_user=解封用户',
     FOREIGN KEY (user_id) REFERENCES user_names(user_id) ON DELETE CASCADE,
     FOREIGN KEY (admin_id) REFERENCES admin_names(admin_id) ON DELETE CASCADE,
     CONSTRAINT chk_user_or_admin CHECK (
