@@ -202,6 +202,14 @@ python app.py
 ```bash
 mysql -u username -p < DataBase.sql
 ```
+若要使用到历史记录（历史记录用的是哈希方式存图片ID），注册后还需要：
+```bash
+USE AIDataBase;
+ALTER TABLE session_users
+ ADD COLUMN file_hash CHAR(64) AFTER image_path;
+```
+
+
 
 ## 开发团队协作指南
 

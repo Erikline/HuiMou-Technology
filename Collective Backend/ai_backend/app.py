@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import secrets
@@ -12,7 +13,7 @@ from functools import wraps
 import cv2
 from flask import Flask, request, jsonify, render_template, session, send_from_directory
 from flask_cors import CORS
-from moviepy.editor import ImageSequenceClip
+from moviepy import *
 from openai import OpenAI
 
 from ultralytics import YOLO
@@ -128,6 +129,175 @@ def ddos_protection(action_type):
         return decorated_function
     return decorator
 
+# ===================== 多轮对话核心工具 =====================
+def build_chat_context(session_id: int, max_rounds: int = 10):
+    """
+    把历史 user/assistant 消息按轮次拼成 OpenAI messages。
+    最新 max_rounds 轮，过长会截断。
+    """
+    rows = execute_query(
+        """
+        SELECT um.round_id,
+               um.message_content      AS user_msg,
+               ar.response_content     AS ai_msg
+        FROM   user_messages um
+        LEFT JOIN ai_responses ar
+               ON um.session_id = ar.session_id
+              AND um.round_id  = ar.round_id
+        WHERE  um.session_id = %s
+        ORDER  BY um.round_id
+        """,
+        (session_id,),
+        fetch=True
+    )
+
+    # 保留最近 max_rounds 轮
+    rows = rows[-max_rounds:]
+
+    context = []
+    for r in rows:
+        context.append({"role": "user",      "content": r["user_msg"]})
+        if r["ai_msg"]:
+            context.append({"role": "assistant","content": r["ai_msg"]})
+    return context
+
+
+# ===================== 纯文本多轮对话接口 =====================
+@app.route('/chat', methods=['POST'])
+@require_auth
+@ddos_protection('conversation')
+def chat_endpoint():
+    """
+    前端纯文本对话：
+    POST /chat  { "session_id":123, "userQuery":"..." }
+    返回 {"assistant":"...", "round_id":n}
+    """
+    data       = request.json or {}
+    session_id = data.get('session_id')
+    user_query = data.get('userQuery')
+    user_id    = session.get('user_id')
+
+    if not session_id or not user_query:
+        return jsonify({"error":"Missing session_id or userQuery"}), 400
+
+    # 取下一轮轮次
+    round_id = execute_query(
+        "SELECT COALESCE(MAX(round_id),0)+1 AS nxt FROM user_messages WHERE session_id=%s",
+        (session_id,), fetch=True
+    )[0]['nxt']
+
+    # ---- 写入用户消息
+    execute_query(
+        "INSERT INTO user_messages (session_id,round_id,message_content) VALUES (%s,%s,%s)",
+        (session_id, round_id, user_query)
+    )
+
+    # ---- 组装上下文 ---------------------------------
+    messages = build_chat_context(session_id)
+
+    # ⭐ 取此次会话对应的处理后图片路径
+    img_row = execute_query(
+        "SELECT processed_image_path FROM session_results WHERE session_id=%s",
+        (session_id,), fetch=True
+    )
+    if img_row and img_row[0]["processed_image_path"]:
+        img_path = img_row[0]["processed_image_path"]
+        # 把图片转 base64，再塞到 messages 开头
+        with open(img_path, "rb") as f:
+            img_b64 = base64.b64encode(f.read()).decode("utf-8")
+        messages.insert(
+            0,
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+                    },
+                    {"type": "text", "text": "(已知图片内容，继续对话)"}
+                ],
+            },
+        )
+
+    # 把当前用户问题追加到末尾
+    messages.append({"role": "user", "content": user_query})
+
+    # ---- 调大模型
+    completion = client.chat.completions.create(
+        model="doubao-1.5-vision-lite-250315",
+        messages=messages
+    )
+    assistant_reply = completion.choices[0].message.content
+
+    # ---- 写入 AI 回复
+    execute_query(
+        "INSERT INTO ai_responses (session_id,round_id,response_content) VALUES (%s,%s,%s)",
+        (session_id, round_id, assistant_reply)
+    )
+
+    return jsonify({"assistant": assistant_reply, "round_id": round_id})
+
+
+# ===================== 获取历史记录接口 =====================
+@app.route('/history/<int:session_id>', methods=['GET'])
+@require_auth
+def get_history(session_id):
+    """
+    GET /history/123  → 返回该会话全部轮次 [{role:"user",content:"..."},{role:"assistant",...},...]
+    """
+    rows = execute_query(
+        """
+        SELECT um.round_id,
+               um.message_content  AS user_msg,
+               ar.response_content AS ai_msg
+        FROM   user_messages um
+        LEFT JOIN ai_responses ar
+               ON um.session_id = ar.session_id
+              AND um.round_id  = ar.round_id
+        WHERE  um.session_id = %s
+        ORDER  BY um.round_id
+        """,
+        (session_id,),
+        fetch=True
+    )
+    history=[]
+    for r in rows:
+        history.append({"role":"user",      "content": r["user_msg"]})
+        if r["ai_msg"]:
+            history.append({"role":"assistant","content": r["ai_msg"]})
+    return jsonify(history)
+
+
+# ========= 用户所有会话列表 =========
+@app.route('/history/sessions', methods=['GET'])
+@require_auth
+def list_user_sessions():
+    """返回当前用户的所有会话（含图片路径）"""
+    user_id = session.get('user_id')
+    rows = execute_query(
+        """
+        SELECT su.session_id,
+               su.created_at,
+               sc.detection_category,
+               sr.processed_image_path
+        FROM   session_users su
+        LEFT JOIN session_categories sc
+               ON su.session_id = sc.session_id
+        LEFT JOIN session_results sr
+               ON su.session_id = sr.session_id
+        WHERE  su.user_id = %s
+        ORDER  BY su.created_at DESC
+        """,
+        (user_id,),
+        fetch=True
+    )
+    return jsonify(rows)
+
+
+# ========= 会话详情（你已写过，但保留） =========
+# GET /history/<session_id> 路由  —— 之前已在 chat 代码块中实现
+
+
 # 用户认证接口
 @app.route('/auth/register', methods=['POST'])
 def register():
@@ -209,9 +379,8 @@ def index():
 @require_auth
 @ddos_protection('session')
 def detect():
-    """处理文件上传、模型预测和结果返回。"""
+    """处理文件上传、模型预测和结果返回（支持同图复用会话）"""
     if 'source' not in request.files:
-        logging.error("No file part in request")
         return jsonify({"error": "No file part"}), 400
 
     file = request.files['source']
@@ -219,108 +388,131 @@ def detect():
     file_type = request.form.get('fileType', 'image')
     user_id = session.get('user_id')
 
-    logging.info(f"User {user_id} - Received file: {file.filename}, weight_file: {weight_file}, file_type: {file_type}")
-
     if file.filename == '':
-        logging.error("No selected file")
         return jsonify({"error": "No selected file"}), 400
 
-    # 生成唯一的文件名
-    unique_filename = f"{uuid.uuid4()}_{file.filename}"
-    source_path = os.path.join(UPLOAD_DIR, unique_filename)
-    file.save(source_path)
+    # ---------- 计算上传文件 SHA256，用于去重 ---------------------
+    file_bytes = file.read()
+    file_hash  = hashlib.sha256(file_bytes).hexdigest()
 
-    # 清理输出目录
-    clean_results_dir()
+    # ---------- 查询是否已有相同图片会话 -------------------------
+    reused = execute_query(
+        """
+        SELECT session_id
+        FROM   session_users
+        WHERE  user_id   = %s
+          AND  file_hash = %s
+        """,
+        (user_id, file_hash),
+        fetch=True
+    )
 
-    try:
-        # 创建会话记录 - 修改session_id生成方式
-        # 使用时间戳的后6位数字，确保在INT范围内
+    if reused:
+        # —— 曾经上传过同一张图，直接复用旧 session_id ——
+        session_id = reused[0]['session_id']
+    else:
+        # ---------- 生成唯一 session_id -------------------------
         session_id = int(str(int(time.time()))[-6:]) + random.randint(1000, 9999)
-        
-        # 确保session_id唯一性
-        while True:
-            existing = execute_query(
-                "SELECT session_id FROM session_users WHERE session_id = %s",
-                (session_id,),
-                fetch=True
-            )
-            if not existing:
-                break
+        while execute_query(
+            "SELECT 1 FROM session_users WHERE session_id=%s",
+            (session_id,), fetch=True
+        ):
             session_id = int(str(int(time.time()))[-6:]) + random.randint(1000, 9999)
-        
-        # 记录会话
+
+        # ---------- 保存原图到 uploads/ 目录 --------------------
+        unique_name = f"{uuid.uuid4()}_{file.filename}"
+        source_path = os.path.join(UPLOAD_DIR, unique_name)
+        with open(source_path, 'wb') as f:
+            f.write(file_bytes)
+
+        # ---------- 写入 session_users（带 file_hash）-----------
         execute_query(
-            "INSERT INTO session_users (session_id, user_id, image_path) VALUES (%s, %s, %s)",
-            (session_id, user_id, source_path)
+            """
+            INSERT INTO session_users (session_id, user_id, image_path, file_hash)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (session_id, user_id, source_path, file_hash)
         )
-        
-        # 加载 YOLO 模型
+
+    # ========== 以下逻辑：预测、保存结果、写入其它表 ==========
+    # 1. 若之前已经处理过，则直接从 session_results 取 processed_image_path
+    processed_row = execute_query(
+        "SELECT processed_image_path FROM session_results WHERE session_id=%s",
+        (session_id,), fetch=True
+    )
+
+    if processed_row:
+        permanent_path = processed_row[0]['processed_image_path']
+    else:
+        # -------- 处理模型 ------------------------------------
         model = YOLO(os.path.join(WEIGHTS_DIR, weight_file))
-        logging.info(f"Model loaded successfully: {weight_file}")
-
-        # 处理图片或视频
         if file_type == 'video':
-            result_path = process_video(model, source_path)
+            tmp_path = process_video(model, source_path)
         else:
-            result_path = process_image(model, source_path)
+            tmp_path = process_image(model, source_path)
 
-        # 将处理后的图片路径保存到数据库而不是上传到OSS
-        # 创建一个永久存储目录
-        permanent_dir = 'processed_images'
-        os.makedirs(permanent_dir, exist_ok=True)
-        
-        # 生成永久文件名
-        permanent_filename = f"processed_{session_id}_{os.path.basename(result_path)}"
-        permanent_path = os.path.join(permanent_dir, permanent_filename)
-        
-        # 复制文件到永久目录
-        shutil.copy2(result_path, permanent_path)
-        
-        # 记录识别结果，包含本地图片路径
+        # 永久目录
+        os.makedirs(PROCESSED_DIR, exist_ok=True)
+        permanent_filename = f"processed_{session_id}_{os.path.basename(tmp_path)}"
+        permanent_path     = os.path.join(PROCESSED_DIR, permanent_filename)
+        shutil.copy2(tmp_path, permanent_path)
+        safe_delete(tmp_path)
+
+        # 写入 session_results
         execute_query(
-            "INSERT INTO session_results (session_id, recognition_result, processed_image_path) VALUES (%s, %s, %s)",
+            """
+            INSERT INTO session_results (session_id, recognition_result, processed_image_path)
+            VALUES (%s, %s, %s)
+            """,
             (session_id, f"使用{weight_file}模型识别完成", permanent_path)
         )
-        
-        # 记录检测类别（根据权重文件推断）
-        category_map = {
-            '烟雾.pt': 'smoke_detection',
-            '火焰.pt': 'fire_detection',
-            '人员落水.pt': 'person_drowning',
-            '光伏板.pt': 'solar_panel_inspection',
-            '河道漂浮物.pt': 'river_floating_objects',
-            '植物生长.pt': 'crop_growth_monitoring',
-            '人闯红灯.pt': 'pedestrian_red_light',
-            '车闯红灯.pt': 'vehicle_red_light',
-            '人员摔倒.pt': 'person_fall_detection',
-            '景区人流量识别.pt': 'scenic_area_crowd'
-        }
-        
-        detection_category = category_map.get(weight_file, 'smoke_detection')
-        execute_query(
-            "INSERT INTO session_categories (session_id, detection_category) VALUES (%s, %s)",
-            (session_id, detection_category)
-        )
 
-        logging.info(f"File processed and saved locally: {permanent_path}")
+        # 写入 session_categories（若首次）
+        if not execute_query(
+            "SELECT 1 FROM session_categories WHERE session_id=%s",
+            (session_id,), fetch=True
+        ):
+            category_map = {
+                '烟雾.pt':'smoke_detection','火焰.pt':'fire_detection','人员落水.pt':'person_drowning',
+                '光伏板.pt':'solar_panel_inspection','河道漂浮物.pt':'river_floating_objects',
+                '植物生长.pt':'crop_growth_monitoring','人闯红灯.pt':'pedestrian_red_light',
+                '车闯红灯.pt':'vehicle_red_light','人员摔倒.pt':'person_fall_detection',
+                '景区人流量识别.pt':'scenic_area_crowd'
+            }
+            execute_query(
+                "INSERT INTO session_categories (session_id,detection_category) VALUES (%s,%s)",
+                (session_id, category_map.get(weight_file,'smoke_detection'))
+            )
 
-        # 清理临时文件
-        safe_delete(source_path)
-        safe_delete(result_path)
+    # 返回 URL 友好路径
+    return jsonify({
+        "result"    : permanent_path.replace("\\", "/"),
+        "session_id": session_id,
+        "message"   : "图片处理完成（自动复用或新建会话）"
+    })
     
-        # 确保返回的路径是URL友好的（使用正斜杠）
-        url_friendly_path = permanent_path.replace("\\", "/")
-    
-        return jsonify({
-            "result": url_friendly_path,
-            "session_id": session_id,
-            "message": "图片处理完成，已保存到本地数据库"
-        })
-    
-    except Exception as e:
-        logging.error(f"Error processing file: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+    # except Exception as e:
+    #     logging.error(f"Error processing file: {str(e)}")
+    #     return jsonify({"error": str(e)}), 500
+
+@app.route('/history/<int:session_id>', methods=['DELETE'])
+@require_auth
+def delete_session(session_id):
+    """删除当前用户的一条会话记录"""
+    user_id = session.get('user_id')
+
+    # 安全：只允许删除自己的会话
+    row = execute_query(
+        "SELECT session_id FROM session_users WHERE session_id = %s AND user_id = %s",
+        (session_id, user_id),
+        fetch=True
+    )
+
+    if not row:
+        return jsonify({'error': '无权删除该会话'}), 403
+
+    execute_query("DELETE FROM session_users WHERE session_id = %s", (session_id,))
+    return jsonify({'success': True})
 
 @app.route('/analyze', methods=['POST'])
 @require_auth

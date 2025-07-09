@@ -64,6 +64,11 @@ const routes = [
     name: 'adminDashboard',
     component: AdminDashboard,
     meta: { requiresAuth: true, role: 'admin' }
+  },
+  {
+      path: '/history',
+      name: 'History',
+      component: () => import('@/views/History.vue')
   }
 ]
 

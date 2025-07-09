@@ -9,7 +9,7 @@ DB_CONFIG = {
     'port': 3306,
     'database': 'aidatabase',
     'user': 'root',
-    'password': 'xxxxxxx',  # 请修改为实际密码
+    'password': '112230',  # 请修改为实际密码
     'charset': 'utf8mb4',
     'autocommit': True
 }

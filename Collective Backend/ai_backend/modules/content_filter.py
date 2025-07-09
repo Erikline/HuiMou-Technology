@@ -1,6 +1,6 @@
 import time
 
-from config.database import execute_query
+from ai_backend.config.database import execute_query
 from typing import Dict, List
 
 

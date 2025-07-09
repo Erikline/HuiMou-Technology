@@ -208,7 +208,7 @@ export default {
       this.$refs.fileInput.click();
     },
     showHistoryMessage() {
-      alert('历史记录暂未开发');
+      this.$router.push('/history');
     },
     showModeSwitchMessage() {
       this.currentMode = this.currentMode === 'image' ? 'video' : 'image';
