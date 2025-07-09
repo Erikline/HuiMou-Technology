@@ -1,7 +1,7 @@
 import hashlib
 import time
 from datetime import datetime, timedelta
-from ai_backend.config.database import execute_query
+from config.database import execute_query
 import logging
 
 class UserManager:
@@ -121,11 +121,9 @@ class UserManager:
             
             return user_id
         except Exception as e:
-            import traceback
-            traceback.print_exc()  # 输出完整堆栈
             logging.error(f"Error creating user: {e}")
             raise
-
+    
     @staticmethod
     def authenticate_user(username, password):
         """用户认证"""
