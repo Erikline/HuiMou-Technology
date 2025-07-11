@@ -18,6 +18,22 @@
 
     <!-- 主体内容 -->
     <div class="content flex-grow-1 p-4">
+      <!-- 顶部信息栏 -->
+      <div class="top-navbar bg-white shadow-sm p-3 mb-4 rounded">
+        <div class="d-flex justify-content-between align-items-center">
+          <h2 class="mb-0 text-dark fw-bold">
+            <i class="fas fa-tachometer-alt me-2 text-primary"></i>
+            管理员控制台
+          </h2>
+          <div class="d-flex align-items-center">
+            <span class="badge bg-success me-3">
+              <i class="fas fa-circle me-1"></i>在线
+            </span>
+            <small class="text-muted">{{ currentTime }}</small>
+          </div>
+        </div>
+      </div>
+
       <div v-if="view === 'status'">
         <h3>用户管理</h3>
         
@@ -99,12 +115,37 @@ export default {
       view: 'status',
       banForm: { userId: '', reason: 'manual_ban', duration: '' },
       unbanForm: { userId: '' },
-      bannedUsers: []
+      bannedUsers: [],
+      currentTime: ''
     }
   },
   async created() {
-    const isAdmin = await this.$store.dispatch('checkAdmin');
-    if (!isAdmin) this.$router.push('/');
+    // 修复：检查用户是否已登录且为管理员
+    if (!this.$store.getters.isAuthenticated) {
+      this.$router.push('/login');
+      return;
+    }
+    
+    // 检查是否为管理员
+    const user = this.$store.getters.currentUser;
+    if (user?.role !== 'admin') {
+      // 如果不是管理员，尝试检查权限
+      const isAdmin = await this.$store.dispatch('checkAdmin');
+      if (!isAdmin) {
+        this.$router.push('/');
+        return;
+      }
+    }
+    
+    // 初始化时间并设置定时器
+    this.updateTime();
+    this.timeInterval = setInterval(this.updateTime, 1000);
+  },
+  beforeUnmount() {
+    // 清理定时器
+    if (this.timeInterval) {
+      clearInterval(this.timeInterval);
+    }
   },
   mounted() {
     if (this.$store.getters.isAdmin) {
@@ -112,6 +153,9 @@ export default {
     }
   },
   methods: {
+    updateTime() {
+      this.currentTime = new Date().toLocaleString('zh-CN');
+    },
     async checkAdminPermission() {
       if (!this.$store.getters.isAdmin) {
         this.$router.push('/');
@@ -128,8 +172,9 @@ export default {
       
       try {
         const response = await fetch('http://localhost:5001/admin/banned-users', {
+          credentials: 'include',  // 使用 session 认证
           headers: {
-            'Admin-ID': this.$store.state.user?.id || ''
+            'Content-Type': 'application/json'
           }
         });
         if (response.ok) {
@@ -147,24 +192,36 @@ export default {
         const response = await fetch('http://localhost:5001/admin/ban-user', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
-            'Admin-ID': this.$store.state.user?.id || ''
+            'Content-Type': 'application/json'
           },
+          credentials: 'include',
           body: JSON.stringify({
-            user_id: this.banForm.userId,
+            user_id: parseInt(this.banForm.userId),
             reason: this.banForm.reason,
-            duration: this.banForm.duration || null
+            duration: this.banForm.duration ? parseInt(this.banForm.duration) : 1440
           })
         });
         
+        const result = await response.json();
         if (response.ok) {
           alert('封禁成功');
           this.fetchBannedUsers();
           this.banForm = { userId: '', reason: 'manual_ban', duration: '' };
+        } else {
+          alert(`封禁失败: ${result.error}`);
+          console.error('Ban error:', result);
         }
       } catch (error) {
-        alert('封禁操作失败');
+        console.error('封禁操作失败:', error);
+        alert('封禁操作失败: ' + error.message);
       }
+    },
+    async unbanUser() {
+      if (!(await this.checkAdminPermission())) return;
+      if (!this.unbanForm.userId) return alert('请输入用户ID');
+      
+      await this.unbanUserById(this.unbanForm.userId);
+      this.unbanForm = { userId: '' };
     },
     async unbanUserById(userId) {
       if (!(await this.checkAdminPermission())) return;
@@ -175,16 +232,23 @@ export default {
           {
             method: 'POST',
             headers: {
-              'Admin-ID': this.$store.state.user?.id || ''
-            }
+              'Content-Type': 'application/json'
+            },
+            credentials: 'include'
           }
         );
+        
+        const result = await response.json();
         if (response.ok) {
           alert('解封成功');
           this.fetchBannedUsers();
+        } else {
+          alert(`解封失败: ${result.error}`);
+          console.error('Unban error:', result);
         }
       } catch (error) {
-        alert('解封操作失败');
+        console.error('解封操作失败:', error);
+        alert('解封操作失败: ' + error.message);
       }
     },
     goBack() {
@@ -209,5 +273,8 @@ export default {
 .nav-link.active {
   font-weight: bold;
   background-color: rgba(255, 255, 255, 0.1);
+}
+.top-navbar {
+  border-bottom: 1px solid #e9ecef;
 }
 </style>

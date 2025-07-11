@@ -218,22 +218,27 @@ export default {
 
         if (response.ok) {
           if (this.isLogin) {
-            // ✅ 登录成功 → 存 localStorage
+            // ✅ 修复：正确处理后端返回的数据格式
             const userData = {
               user_id: data.user_id,
               username: data.username,
               role: data.role
             };
+            
+            // ✅ 存储到 localStorage
             localStorage.setItem('user', JSON.stringify(userData));
             
-            // ✅ 新增：更新 Vuex 状态
-            this.$store.commit('setUser', userData);
-
-            // ✅ 跳转到对应页面
+            // ✅ 修复：按照 Vuex store 期望的格式更新状态
+            this.$store.commit('setUser', { 
+              user: userData, 
+              role: data.role 
+            });
+            
+            // ✅ 根据角色跳转到对应页面
             if (data.role === 'admin') {
               this.$router.push('/admin');
             } else {
-              this.$router.push('/product-market');  // 普通用户
+              this.$router.push('/product-market');
             }
           }
 

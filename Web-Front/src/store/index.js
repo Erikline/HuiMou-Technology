@@ -30,9 +30,10 @@ export default createStore({
     }
   },
   actions: {
+    // 修复所有API地址为5001端口
     async login({ commit }, { username, password }) {
       try {
-        const response = await fetch('http://127.0.0.1:8080/auth/login', {
+        const response = await fetch('http://localhost:5001/auth/login', {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
@@ -41,10 +42,13 @@ export default createStore({
         const data = await response.json()
         
         if (response.ok) {
-          // 修改：从响应中获取用户角色
           commit('setUser', { 
-            user: data.user, 
-            role: data.role // 确保后端返回 role 字段
+            user: {
+              user_id: data.user_id,
+              username: data.username,
+              role: data.role
+            }, 
+            role: data.role
           })
         }
         return data
@@ -53,9 +57,10 @@ export default createStore({
         throw error
       }
     },
+    
     async logout({ commit }) {
       try {
-        await fetch('http://127.0.0.1:8080/auth/logout', {
+        await fetch('http://localhost:5001/auth/logout', {
           method: 'POST',
           credentials: 'include'
         })
@@ -65,11 +70,11 @@ export default createStore({
         commit('clearUser')
       }
     },
-    // 新增：检查用户权限
+    
     async checkAdmin({ commit, state }) {
       if (!state.isAuthenticated) return false
       try {
-        const response = await fetch('http://127.0.0.1:8080/auth/check-admin', {
+        const response = await fetch('http://localhost:5001/auth/check-admin', {
           credentials: 'include'
         })
         const { isAdmin } = await response.json()

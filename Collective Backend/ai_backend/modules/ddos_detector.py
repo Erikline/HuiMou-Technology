@@ -1,6 +1,6 @@
 import time
 from datetime import datetime, timedelta
-from ai_backend.config.database import execute_query
+from config.database import execute_query
 import logging
 
 class DDoSDetector:

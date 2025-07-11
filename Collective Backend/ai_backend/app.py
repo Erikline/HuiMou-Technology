@@ -62,7 +62,6 @@ client = OpenAI(
 )
 
 # 装饰器：检查用户认证和封禁状态
-# 装饰器：检查用户认证和封禁状态
 def require_auth(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -392,48 +391,32 @@ def detect():
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
 
-    # ---------- 计算上传文件 SHA256，用于去重 ---------------------
+    # 计算上传文件 SHA256（保留用于日志记录）
     file_bytes = file.read()
-    file_hash  = hashlib.sha256(file_bytes).hexdigest()
-
-    # ---------- 查询是否已有相同图片会话 -------------------------
-    reused = execute_query(
-        """
-        SELECT session_id
-        FROM   session_users
-        WHERE  user_id   = %s
-          AND  file_hash = %s
-        """,
-        (user_id, file_hash),
-        fetch=True
-    )
-
-    if reused:
-        # —— 曾经上传过同一张图，直接复用旧 session_id ——
-        session_id = reused[0]['session_id']
-    else:
-        # ---------- 生成唯一 session_id -------------------------
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
+    
+    # 移除文件去重查询，直接生成新的 session_id
+    session_id = int(str(int(time.time()))[-6:]) + random.randint(1000, 9999)
+    while execute_query(
+        "SELECT 1 FROM session_users WHERE session_id=%s",
+        (session_id,), fetch=True
+    ):
         session_id = int(str(int(time.time()))[-6:]) + random.randint(1000, 9999)
-        while execute_query(
-            "SELECT 1 FROM session_users WHERE session_id=%s",
-            (session_id,), fetch=True
-        ):
-            session_id = int(str(int(time.time()))[-6:]) + random.randint(1000, 9999)
-
-        # ---------- 保存原图到 uploads/ 目录 --------------------
-        unique_name = f"{uuid.uuid4()}_{file.filename}"
-        source_path = os.path.join(UPLOAD_DIR, unique_name)
-        with open(source_path, 'wb') as f:
-            f.write(file_bytes)
-
-        # ---------- 写入 session_users（带 file_hash）-----------
-        execute_query(
-            """
-            INSERT INTO session_users (session_id, user_id, image_path, file_hash)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (session_id, user_id, source_path, file_hash)
-        )
+    
+    # 保存原图到 uploads/ 目录
+    unique_name = f"{uuid.uuid4()}_{file.filename}"
+    source_path = os.path.join(UPLOAD_DIR, unique_name)
+    with open(source_path, 'wb') as f:
+        f.write(file_bytes)
+    
+    # 写入 session_users（移除 file_hash 字段）
+    execute_query(
+        """
+        INSERT INTO session_users (session_id, user_id, image_path)
+        VALUES (%s, %s, %s)
+        """,
+        (session_id, user_id, source_path)
+    )
 
     # ========== 以下逻辑：预测、保存结果、写入其它表 ==========
     # 1. 若之前已经处理过，则直接从 session_results 取 processed_image_path
@@ -742,14 +725,21 @@ def get_banned_users():
 def ban_user():
     """封禁用户"""
     data = request.json
-    admin_id = request.headers.get('Admin-ID')
-    if not admin_id:
-        return jsonify({"error": "Missing Admin-ID header"}), 401
+    # 移除Admin-ID header检查，因为已经有session认证和admin权限检查
     try:
+        # 检查用户是否存在
+        user_exists = execute_query(
+            "SELECT 1 FROM user_names WHERE user_id = %s",
+            (data.get('user_id'),),
+            fetch=True
+        )
+        if not user_exists:
+            return jsonify({"error": "User not found"}), 404
+            
         AdminManager.ban_user(
             user_id=data.get('user_id'),
             reason=data.get('reason', 'manual_ban'),
-            duration=data.get('duration')
+            duration=data.get('duration', 1440)  # 默认24小时
         )
         return jsonify({"message": "User banned successfully"})
     except Exception as e:

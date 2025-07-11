@@ -74,10 +74,10 @@ class UserManager:
     def create_user(username: str, password: str, role: str = 'user') -> int:
         """创建新用户"""
         try:
-            # 插入用户名
+            # 插入用户名和角色（只插入一次）
             execute_query(
-                "INSERT INTO user_names (username) VALUES (%s)",
-                (username,)
+                "INSERT INTO user_names (username, role) VALUES (%s, %s)",
+                (username, role)
             )
             
             # 获取用户ID
@@ -97,12 +97,6 @@ class UserManager:
             execute_query(
                 "INSERT INTO user_passwords (user_id, password) VALUES (%s, %s)",
                 (user_id, hashed_password)
-            )
-
-            # 插入用户记录（包含role字段）
-            execute_query(
-                "INSERT INTO user_names (username, role) VALUES (%s, %s)",  
-                (username, role) 
             )
             
             # 初始化安全统计
@@ -142,15 +136,15 @@ class UserManager:
             auth_data = execute_query(
                 """
                 SELECT 
-                    u.user_id, 
-                    COALESCE(u.username, a.admin_name) AS username,
-                    COALESCE(u.role, 'admin') AS role,
+                    combined.user_id, 
+                    COALESCE(combined.username, combined.admin_name) AS username,
+                    COALESCE(combined.role, 'admin') AS role,
                     'user' AS auth_type
                 FROM (
-                    SELECT user_id, username, role FROM user_names 
+                    SELECT user_id, username, role, NULL AS admin_name FROM user_names 
                     WHERE username = %s
                     UNION ALL
-                    SELECT admin_id AS user_id, admin_name AS username, 'admin' AS role 
+                    SELECT admin_id AS user_id, NULL AS username, 'admin' AS role, admin_name 
                     FROM admin_names 
                     WHERE admin_name = %s
                 ) AS combined
